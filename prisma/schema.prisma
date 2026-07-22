@@ -1,0 +1,76 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum PostStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model User {
+  id            String    @id @default(uuid())
+  email         String    @unique
+  password      String?
+  anonymousName String
+  avatar        String?
+  bio           String?
+  college       String?
+  role          Role      @default(USER)
+  isBanned      Boolean   @default(false)
+  createdAt     DateTime  @default(now())
+
+  posts         Post[]
+  comments      Comment[]
+  reports       Report[]
+}
+
+model Post {
+  id        String     @id @default(uuid())
+  content   String
+  image     String?
+  category  String
+  college   String?
+  status    PostStatus @default(APPROVED)
+  createdAt DateTime   @default(now())
+
+  userId    String
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  comments  Comment[]
+  reports   Report[]
+}
+
+model Comment {
+  id        String   @id @default(uuid())
+  content   String
+  createdAt DateTime @default(now())
+
+  postId    String
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Report {
+  id        String   @id @default(uuid())
+  reason    String
+  createdAt DateTime @default(now())
+
+  postId    String
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
