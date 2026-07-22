@@ -13,6 +13,16 @@ app.use(helmet());
 app.use(cors());
 app.use(express.json());
 
+// Root Health Check Route for Render / Browsers
+app.get('/', (req, res) => {
+  res.json({
+    status: 'ACTIVE',
+    app: 'Cockroach SABHA Server API',
+    tagline: 'Survive. Speak. Repeat.',
+    timestamp: new Date().toISOString()
+  });
+});
+
 // API Routes
 app.use('/api', apiRoutes);
 
