@@ -74,3 +74,12 @@ model Report {
   userId    String
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
+
+model ApiLog {
+  id        String   @id @default(uuid())
+  method    String
+  path      String
+  ipHash    String
+  status    Int
+  timestamp DateTime @default(now())
+}

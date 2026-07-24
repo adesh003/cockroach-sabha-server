@@ -60,5 +60,12 @@ router.post('/report', async (req, res) => {
 router.get('/admin/posts', api.getAdminPosts);
 router.patch('/admin/posts/:id/status', api.updatePostStatus);
 router.post('/admin/users/:id/ban', api.banUser);
+router.get('/admin/stats', async (req, res) => {
+  const user = await getAuthUser(req);
+  if (!user || user.role !== 'ADMIN') {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  return api.getStats(req, res);
+});
 
 export default router;

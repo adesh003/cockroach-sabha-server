@@ -456,3 +456,55 @@ export async function deletePost(req, res, user) {
     return res.status(500).json({ error: 'Failed to delete motion' });
   }
 }
+
+// GET SYSTEM STATS (API CALLS & UNIQUE VISITORS)
+export async function getStats(req, res) {
+  try {
+    const stats = await safeDb(
+      async () => {
+        const totalApiCalls = await prisma.apiLog.count();
+        const uniqueGroup = await prisma.apiLog.groupBy({
+          by: ['ipHash'],
+        });
+        const uniqueVisitors = uniqueGroup.length;
+
+        const pathsGroup = await prisma.apiLog.groupBy({
+          by: ['path'],
+          _count: { path: true },
+        });
+        const apiCallsByPath = pathsGroup
+          .map(item => ({
+            path: item.path,
+            count: item._count.path,
+          }))
+          .sort((a, b) => b.count - a.count);
+
+        return { totalApiCalls, uniqueVisitors, apiCallsByPath };
+      },
+      () => {
+        const logs = memoryStore.apiLogs || [];
+        const totalApiCalls = logs.length;
+        const uniqueVisitors = new Set(logs.map(l => l.ipHash)).size;
+
+        const pathCounts = {};
+        logs.forEach(l => {
+          pathCounts[l.path] = (pathCounts[l.path] || 0) + 1;
+        });
+
+        const apiCallsByPath = Object.entries(pathCounts)
+          .map(([path, count]) => ({
+            path,
+            count,
+          }))
+          .sort((a, b) => b.count - a.count);
+
+        return { totalApiCalls, uniqueVisitors, apiCallsByPath };
+      }
+    );
+
+    return res.json(stats);
+  } catch (err) {
+    logger.error(err, 'Error fetching stats');
+    return res.status(500).json({ error: 'Failed to fetch API stats' });
+  }
+}

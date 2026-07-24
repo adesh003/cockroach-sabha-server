@@ -127,7 +127,8 @@ export const memoryStore = {
     }
   ],
   comments: [],
-  reports: []
+  reports: [],
+  apiLogs: []
 };
 
 // Safe DB execution wrapper with fallback
