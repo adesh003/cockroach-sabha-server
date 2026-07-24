@@ -6,8 +6,24 @@ import { moderateContent } from '../services/geminiModeration.js';
 // AUTH CONTROLLER
 export async function authenticate(req, res) {
   try {
-    const { email, password, username, avatar, bio, college } = req.body;
+    const { email, password, username, avatar, bio, college, mode } = req.body;
     if (!email) return res.status(400).json({ error: 'Email is required' });
+
+    // Check user existence to enforce explicit login/signup modes if specified
+    if (mode === 'login' || mode === 'signup') {
+      const existingUser = await safeDb(
+        () => prisma.user.findUnique({ where: { email } }),
+        () => memoryStore.users.find(x => x.email === email) || null
+      );
+
+      if (mode === 'login' && !existingUser) {
+        return res.status(404).json({ error: 'Delegate email not registered. Please sign up first!' });
+      }
+
+      if (mode === 'signup' && existingUser) {
+        return res.status(400).json({ error: 'Delegate email already registered. Please log in!' });
+      }
+    }
 
     const user = await safeDb(
       async () => {
