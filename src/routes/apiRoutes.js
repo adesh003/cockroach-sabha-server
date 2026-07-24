@@ -6,6 +6,8 @@ const router = express.Router();
 
 // Auth
 router.post('/auth', api.authenticate);
+router.post('/auth/forgot-password', api.requestResetCode);
+router.post('/auth/reset-password', api.resetPassword);
 router.get('/users/me', async (req, res) => {
   const user = await getAuthUser(req);
   if (!user) return res.status(401).json({ error: 'Unauthorized' });

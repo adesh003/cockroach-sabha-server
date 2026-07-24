@@ -2,8 +2,16 @@ import bcrypt from 'bcryptjs';
 import { prisma, memoryStore, safeDb, logger } from '../config/db.js';
 import { generateAnonymousName } from '../utils/anonymousNames.js';
 import { moderateContent } from '../services/geminiModeration.js';
+import { sendWelcomeEmail, sendResetCodeEmail } from '../services/emailService.js';
 
 // AUTH CONTROLLER
+function generateRecoveryKey() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const part1 = Array.from({ length: 4 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+  const part2 = Array.from({ length: 4 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+  return `SABHA-${part1}-${part2}`;
+}
+
 export async function authenticate(req, res) {
   try {
     const { email, password, username, avatar, bio, college, mode } = req.body;
@@ -37,6 +45,7 @@ export async function authenticate(req, res) {
           const hashedPassword = password ? await bcrypt.hash(password, 10) : null;
           const assignedUsername = username && username.trim() !== '' ? username.trim() : generateAnonymousName(email);
           const isExplicitAdmin = email.trim().toLowerCase() === 'admin@adesh.com';
+          const generatedRecoveryKey = generateRecoveryKey();
           u = await prisma.user.create({
             data: {
               email,
@@ -46,6 +55,7 @@ export async function authenticate(req, res) {
               bio: bio || 'Delegate sitting on the Cockroach Sabha Floor.',
               college: college || null,
               role: isExplicitAdmin ? 'ADMIN' : 'USER',
+              recoveryKey: generatedRecoveryKey,
             },
           });
         }
@@ -62,6 +72,7 @@ export async function authenticate(req, res) {
           const hashedPassword = password ? await bcrypt.hash(password, 10) : null;
           const assignedUsername = username && username.trim() !== '' ? username.trim() : generateAnonymousName(email);
           const isExplicitAdmin = email.trim().toLowerCase() === 'admin@adesh.com';
+          const generatedRecoveryKey = generateRecoveryKey();
           u = {
             id: 'user-' + Date.now(),
             email,
@@ -73,12 +84,20 @@ export async function authenticate(req, res) {
             role: isExplicitAdmin ? 'ADMIN' : 'USER',
             isBanned: false,
             createdAt: new Date(),
+            recoveryKey: generatedRecoveryKey,
           };
           memoryStore.users.push(u);
         }
         return u;
       }
     );
+
+    // Trigger welcome email asynchronously upon successful signup
+    if (mode === 'signup') {
+      sendWelcomeEmail(email, user.anonymousName, user.recoveryKey).catch(err => {
+        logger.error(err, 'Failed to send welcome email');
+      });
+    }
 
     // Sanitize user object to exclude sensitive fields (password, raw email hash)
     const sanitizedUser = {
@@ -92,7 +111,7 @@ export async function authenticate(req, res) {
       createdAt: user.createdAt,
     };
 
-    return res.json({ user: sanitizedUser, token: user.id });
+    return res.json({ user: sanitizedUser, token: user.id, recoveryKey: user.recoveryKey });
   } catch (err) {
     if (err.message === 'INVALID_PASSWORD') {
       return res.status(401).json({ error: 'Incorrect password' });
@@ -522,5 +541,108 @@ export async function getStats(req, res) {
   } catch (err) {
     logger.error(err, 'Error fetching stats');
     return res.status(500).json({ error: 'Failed to fetch API stats' });
+  }
+}
+
+// REQUEST PASSWORD RESET CODE
+export async function requestResetCode(req, res) {
+  try {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ error: 'Email is required' });
+
+    const user = await safeDb(
+      () => prisma.user.findUnique({ where: { email } }),
+      () => memoryStore.users.find(u => u.email === email) || null
+    );
+
+    if (!user) {
+      return res.status(404).json({ error: 'Delegate email not registered.' });
+    }
+
+    // Generate random 6-digit code
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const expires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes from now
+
+    await safeDb(
+      () => prisma.user.update({
+        where: { email },
+        data: { resetCode: code, resetCodeExpires: expires }
+      }),
+      () => {
+        user.resetCode = code;
+        user.resetCodeExpires = expires;
+      }
+    );
+
+    // Send reset code email
+    await sendResetCodeEmail(email, code);
+
+    return res.json({ message: 'A 6-digit confirmation passcode has been sent to your email.' });
+  } catch (err) {
+    logger.error(err, 'Request reset code error');
+    return res.status(500).json({ error: 'Failed to request reset passcode' });
+  }
+}
+
+// RESET PASSWORD VIA RECOVERY KEY OR EMAIL RESET CODE
+export async function resetPassword(req, res) {
+  try {
+    const { email, recoveryKey, code, newPassword } = req.body;
+    if (!email || !newPassword) {
+      return res.status(400).json({ error: 'Missing email or newPassword' });
+    }
+    if (!recoveryKey && !code) {
+      return res.status(400).json({ error: 'Provide either recoveryKey or confirmation code' });
+    }
+
+    const user = await safeDb(
+      () => prisma.user.findUnique({ where: { email } }),
+      () => memoryStore.users.find(u => u.email === email) || null
+    );
+
+    if (!user) {
+      return res.status(404).json({ error: 'Delegate email not found' });
+    }
+
+    // 1. Verify code if code is supplied
+    if (code) {
+      if (!user.resetCode || user.resetCode.trim() !== code.trim()) {
+        return res.status(401).json({ error: 'Incorrect passcode' });
+      }
+      if (user.resetCodeExpires && new Date(user.resetCodeExpires) < new Date()) {
+        return res.status(401).json({ error: 'Confirmation passcode has expired' });
+      }
+    }
+
+    // 2. Verify recovery key if recovery key is supplied (fallback)
+    if (recoveryKey && !code) {
+      if (!user.recoveryKey || user.recoveryKey.trim().toLowerCase() !== recoveryKey.trim().toLowerCase()) {
+        return res.status(401).json({ error: 'Incorrect recovery key' });
+      }
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    await safeDb(
+      () => prisma.user.update({
+        where: { email },
+        data: {
+          password: hashedPassword,
+          resetCode: null,
+          resetCodeExpires: null
+        }
+      }),
+      () => {
+        user.password = hashedPassword;
+        user.resetCode = null;
+        user.resetCodeExpires = null;
+      }
+    );
+
+    logger.info({ email }, 'Password reset successfully');
+    return res.json({ message: 'Password reset successful! You can now log in using your new password.' });
+  } catch (err) {
+    logger.error(err, 'Reset password error');
+    return res.status(500).json({ error: 'Failed to reset password' });
   }
 }
