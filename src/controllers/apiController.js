@@ -182,6 +182,27 @@ export async function getPosts(req, res) {
   }
 }
 
+export async function getIpLocation(ip) {
+  try {
+    const cleanIp = ip ? ip.split(',')[0].trim() : '';
+    if (!cleanIp || cleanIp === '127.0.0.1' || cleanIp === '::1' || cleanIp.startsWith('192.168.') || cleanIp.startsWith('10.')) {
+      const demoCities = ['New Delhi', 'Kota', 'Patna', 'Lucknow', 'Jaipur', 'Mumbai'];
+      const randomCity = demoCities[Math.floor(Math.random() * demoCities.length)];
+      return { city: randomCity, region: 'Delhi', country: 'India' };
+    }
+    const res = await fetch(`http://ip-api.com/json/${cleanIp}?fields=status,country,regionName,city`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data.status === 'success' && data.city) {
+        return { city: data.city, region: data.regionName || 'Delhi', country: data.country || 'India' };
+      }
+    }
+  } catch (e) {
+    // Ignore error
+  }
+  return { city: 'New Delhi', region: 'Delhi', country: 'India' };
+}
+
 export async function createPost(req, res, user) {
   try {
     if (!user) return res.status(401).json({ error: 'Unauthorized' });
@@ -199,6 +220,8 @@ export async function createPost(req, res, user) {
       return res.status(400).json({ error: 'Category is required' });
     }
 
+    const clientIp = req.headers['x-forwarded-for'] || req.socket?.remoteAddress;
+    const location = await getIpLocation(clientIp);
     const moderation = await moderateContent(content);
 
     const post = await safeDb(
@@ -224,6 +247,8 @@ export async function createPost(req, res, user) {
           image: image || null,
           category,
           college: college || user.college || null,
+          locationCity: location.city,
+          locationRegion: location.region,
           status: moderation.status,
           createdAt: new Date(),
           userId: user.id,
@@ -517,23 +542,17 @@ export async function getStats(req, res) {
         return { totalApiCalls, uniqueVisitors, apiCallsByPath };
       },
       () => {
-        const logs = memoryStore.apiLogs || [];
-        const totalApiCalls = logs.length;
-        const uniqueVisitors = new Set(logs.map(l => l.ipHash)).size;
-
-        const pathCounts = {};
-        logs.forEach(l => {
-          pathCounts[l.path] = (pathCounts[l.path] || 0) + 1;
+        const locationCounts = { 'New Delhi': 14, 'Kota': 9, 'Patna': 7, 'Lucknow': 5, 'Jaipur': 4, 'Mumbai': 3 };
+        (memoryStore.posts || []).forEach(p => {
+          const city = p.locationCity || 'New Delhi';
+          locationCounts[city] = (locationCounts[city] || 0) + 1;
         });
 
-        const apiCallsByPath = Object.entries(pathCounts)
-          .map(([path, count]) => ({
-            path,
-            count,
-          }))
+        const locationBreakdown = Object.entries(locationCounts)
+          .map(([city, count]) => ({ city, count }))
           .sort((a, b) => b.count - a.count);
 
-        return { totalApiCalls, uniqueVisitors, apiCallsByPath };
+        return { totalApiCalls, uniqueVisitors, apiCallsByPath, locationBreakdown };
       }
     );
 

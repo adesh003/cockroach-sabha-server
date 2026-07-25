@@ -60,6 +60,9 @@ router.post('/report', async (req, res) => {
 
 // Admin Dashboard
 router.get('/admin/posts', api.getAdminPosts);
+router.get('/admin/reports', api.getAdminReports);
+router.get('/admin/users', api.getAdminUsers);
+router.patch('/admin/posts/:id', api.updatePostStatus);
 router.patch('/admin/posts/:id/status', api.updatePostStatus);
 router.post('/admin/users/:id/ban', api.banUser);
 router.get('/admin/stats', async (req, res) => {
